@@ -27,7 +27,6 @@ for dataset in datasets:
     for result in all_results:
         if ("mask" not in result):    #skip mask and ground truth
             # get pixels inside the field of view in fundus images
-            print "processing {} ({})...".format(os.path.basename(result), os.path.basename(os.path.dirname(result)))
             pred_vessels=utils.load_images_under_dir(result)/255
             gt_vessels_in_mask, pred_vessels_in_mask = utils.pixel_values_in_mask(gt_vessels, pred_vessels , masks)
              
@@ -40,10 +39,13 @@ for dataset in datasets:
                 if not os.path.isdir(vessels_dir):
                     os.makedirs(vessels_dir)   
                 for index in range(gt_vessels.shape[0]):
-                    pred_vessels[index,...]=utils.threshold_by_otsu(pred_vessels[index,...],masks[index,...], flatten=False)*255
-                    ori_imgs[index,...][pred_vessels[index,...]==0]=(0,0,0)
+                    thresholded_vessel=utils.threshold_by_f1(np.expand_dims(gt_vessels[index,...], axis=0),
+                                                                  np.expand_dims(pred_vessels[index,...], axis=0),
+                                                                  np.expand_dims(masks[index,...], axis=0), 
+                                                                  flatten=False)*255
+                    ori_imgs[index,...][np.squeeze(thresholded_vessel, axis=0)==0]=(0,0,0)
                     Image.fromarray(ori_imgs[index,...].astype(np.uint8)).save(os.path.join(vessels_dir,os.path.basename(filenames[index])))
-                    
+                
                 # compare with the ground truth
                 comp_dir=comparison_out.format(os.path.basename(dataset),os.path.basename(result))
                 if not os.path.isdir(comp_dir):
@@ -51,26 +53,30 @@ for dataset in datasets:
                 for index in range(gt_vessels.shape[0]):
                     diff_map=utils.difference_map(gt_vessels[index,...], pred_vessels[index,...], masks[index,...])
                     Image.fromarray(diff_map.astype(np.uint8)).save(os.path.join(comp_dir,os.path.basename(filenames[index])))
-            # skip the ground truth
-            if "1st_manual" in result:
-                continue
             
-            # compute false positive rate, true positive graph
-            method=os.path.basename(result)
-            methods.append(method)
-            if method=='CRFs' or method=='2nd_manual':
-                cm=confusion_matrix(gt_vessels_in_mask, pred_vessels_in_mask)
-                fpr=1-1.*cm[0,0]/(cm[0,1]+cm[0,0])
-                tpr=1.*cm[1,1]/(cm[1,0]+cm[1,1])
-                prec=1.*cm[1,1]/(cm[0,1]+cm[1,1])
-                recall=tpr
-            else:
-                fpr, tpr, _ = roc_curve(gt_vessels_in_mask, pred_vessels_in_mask)
-                prec, recall, _ = precision_recall_curve(gt_vessels_in_mask, pred_vessels_in_mask)
-            fprs.append(fpr)
-            tprs.append(tpr)
-            precs.append(prec)
-            recalls.append(recall)
+            # skip the ground truth
+            if "1st_manual" not in result:
+                # print metrics
+                print "-- {} --".format(os.path.basename(result))
+                print "dice coefficient : {}".format(utils.dice_coefficient(gt_vessels,pred_vessels, masks))
+                print "f1 score : {}, accuracy : {}, specificity : {}, sensitivity : {}".format(*utils.misc_measures(gt_vessels,pred_vessels, masks))
+
+                # compute false positive rate, true positive graph
+                method=os.path.basename(result)
+                methods.append(method)
+                if method=='CRFs' or method=='2nd_manual':
+                    cm=confusion_matrix(gt_vessels_in_mask, pred_vessels_in_mask)
+                    fpr=1-1.*cm[0,0]/(cm[0,1]+cm[0,0])
+                    tpr=1.*cm[1,1]/(cm[1,0]+cm[1,1])
+                    prec=1.*cm[1,1]/(cm[0,1]+cm[1,1])
+                    recall=tpr
+                else:
+                    fpr, tpr, _ = roc_curve(gt_vessels_in_mask, pred_vessels_in_mask)
+                    prec, recall, _ = precision_recall_curve(gt_vessels_in_mask, pred_vessels_in_mask)
+                fprs.append(fpr)
+                tprs.append(tpr)
+                precs.append(prec)
+                recalls.append(recall)
             
     # save plots of ROC and PR curves
     curve_dir=curves_out.format(os.path.basename(dataset))

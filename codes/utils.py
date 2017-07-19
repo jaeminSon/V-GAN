@@ -1,7 +1,7 @@
 import os
 import sys
 
-from PIL import Image
+from PIL import Image, ImageEnhance
 from keras.preprocessing.image import Iterator
 from scipy.ndimage import rotate
 from skimage import filters
@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 import matplotlib
-
+import random
 
 def all_files_under(path, extension=None, append_path=True, sort=True):
     if append_path:
@@ -222,44 +222,55 @@ def load_obj(name):
     with open(name, 'rb') as f:
         return pickle.load(f)
 
-def threshold_by_otsu(pred_vessels, masks, connect=False, flatten=True):
-    
-    # cut by otsu threshold
-    threshold=filters.threshold_otsu(pred_vessels[masks==1])
-    pred_vessels_bin=np.zeros(pred_vessels.shape)
-    pred_vessels_bin[pred_vessels>=threshold]=1
-    
-    # connect pixels connected to strong intensity and has intensity more than otsu_th/factor
-    if connect:
-        factor=2
-        for i in range(pred_vessels.shape[0]):
-            pred_vessel=pred_vessels[i,...]
-            pred_vessel_bin=pred_vessels_bin[i,...]
-            pred_labels = measure.label(pred_vessel>threshold/factor)
-            labels=np.unique(pred_labels[pred_vessel_bin==1])
-            connected=np.in1d(pred_labels,labels).reshape(pred_vessels.shape)
-            pred_vessel_bin[(pred_vessel>threshold/factor) & connected]=1
+def best_f1_threshold(precision, recall, thresholds):
+    best_f1=-1
+    for index in range(len(precision)):
+        curr_f1=2.*precision[index]*recall[index]/(precision[index]+recall[index])
+        if best_f1<curr_f1:
+            best_f1=curr_f1
+            best_threshold=thresholds[index]
+
+    return best_f1, best_threshold
+
+def threshold_by_f1(true_vessels, generated, masks, flatten=True, f1_score=False):
+    vessels_in_mask, generated_in_mask = pixel_values_in_mask(true_vessels, generated, masks)
+    precision, recall, thresholds = precision_recall_curve(vessels_in_mask.flatten(), generated_in_mask.flatten(),  pos_label=1)
+    best_f1,best_threshold=best_f1_threshold(precision, recall, thresholds)
+        
+    pred_vessels_bin=np.zeros(generated.shape)
+    pred_vessels_bin[generated>=best_threshold]=1
     
     if flatten:
-        return pred_vessels_bin[masks==1].flatten()
+        if f1_score:
+            return pred_vessels_bin[masks==1].flatten(), best_f1
+        else:
+            return pred_vessels_bin[masks==1].flatten()
     else:
-        return pred_vessels_bin
-
-def misc_measures(true_vessel_arr, pred_vessel_arr):
-    cm=confusion_matrix(true_vessel_arr, pred_vessel_arr)
+        if f1_score:
+            return pred_vessels_bin, best_f1
+        else:
+            return pred_vessels_bin
+    
+def misc_measures(true_vessels, pred_vessels, masks):
+    thresholded_vessel_arr, f1_score = threshold_by_f1(true_vessels, pred_vessels, masks, f1_score=True)
+    true_vessel_arr=true_vessels[masks == 1].flatten()
+    
+    cm=confusion_matrix(true_vessel_arr, thresholded_vessel_arr)
     acc=1.*(cm[0,0]+cm[1,1])/np.sum(cm)
     sensitivity=1.*cm[1,1]/(cm[1,0]+cm[1,1])
     specificity=1.*cm[0,0]/(cm[0,1]+cm[0,0])
-    return acc, sensitivity, specificity
+    return f1_score, acc, sensitivity, specificity
 
-def dice_coefficient(true_vessel_arr, pred_vessel_arr):
-    true_vessel_arr = true_vessel_arr.astype(np.bool)
-    pred_vessel_arr = pred_vessel_arr.astype(np.bool)
+def dice_coefficient(true_vessels, pred_vessels, masks):
+    thresholded_vessels=threshold_by_f1(true_vessels, pred_vessels, masks, flatten=False)
     
-    intersection = np.count_nonzero(true_vessel_arr & pred_vessel_arr)
+    true_vessels = true_vessels.astype(np.bool)
+    thresholded_vessels = thresholded_vessels.astype(np.bool)
     
-    size1 = np.count_nonzero(true_vessel_arr)
-    size2 = np.count_nonzero(pred_vessel_arr)
+    intersection = np.count_nonzero(true_vessels & thresholded_vessels)
+    
+    size1 = np.count_nonzero(true_vessels)
+    size2 = np.count_nonzero(thresholded_vessels)
     
     try:
         dc = 2. * intersection / float(size1 + size2)
@@ -280,7 +291,19 @@ def pad_imgs(imgs, img_size):
     
     return padded
     
-def get_imgs(target_dir, augmentation, img_size, dataset):
+def random_perturbation(imgs):
+    for i in range(imgs.shape[0]):
+        im=Image.fromarray(imgs[i,...].astype(np.uint8))
+        en=ImageEnhance.Brightness(im)
+        im=en.enhance(random.uniform(0.8,1.2))
+        en=ImageEnhance.Color(im)
+        im=en.enhance(random.uniform(0.8,1.2))
+        en=ImageEnhance.Contrast(im)
+        im=en.enhance(random.uniform(0.8,1.2))
+        imgs[i,...]= np.asarray(im).astype(np.float32)
+    return imgs 
+    
+def get_imgs(target_dir, augmentation, img_size, dataset, mask=False):
     
     if dataset=='DRIVE':
         img_files, vessel_files, mask_files = DRIVE_files(target_dir)
@@ -290,12 +313,13 @@ def get_imgs(target_dir, augmentation, img_size, dataset):
     # load images    
     fundus_imgs=imagefiles2arrs(img_files)
     vessel_imgs=imagefiles2arrs(vessel_files)/255
-    mask_imgs=imagefiles2arrs(mask_files)/255
     fundus_imgs=pad_imgs(fundus_imgs, img_size)
     vessel_imgs=pad_imgs(vessel_imgs, img_size)
-    mask_imgs=pad_imgs(mask_imgs, img_size)
-    n_ori_imgs=fundus_imgs.shape[0]
-    assert(np.min(vessel_imgs)==0 and np.max(vessel_imgs)==1 and np.min(mask_imgs)==0 and np.max(mask_imgs)==1)
+    assert(np.min(vessel_imgs)==0 and np.max(vessel_imgs)==1)
+    if mask:
+        mask_imgs=imagefiles2arrs(mask_files)/255
+        mask_imgs=pad_imgs(mask_imgs, img_size)
+        assert(np.min(mask_imgs)==0 and np.max(mask_imgs)==1)
 
     # augmentation
     if augmentation:
@@ -306,24 +330,26 @@ def get_imgs(target_dir, augmentation, img_size, dataset):
         flipped_vessels=vessel_imgs[:,:,::-1]
         all_fundus_imgs.append(flipped_imgs)
         all_vessel_imgs.append(flipped_vessels)
-        for angle in range(5,360,5):  # rotated imgs 30~330
-            all_fundus_imgs.append(rotate(fundus_imgs, angle, axes=(1, 2), reshape=False))
-            all_fundus_imgs.append(rotate(flipped_imgs, angle, axes=(1, 2), reshape=False))
+        for angle in range(3,360,3):  # rotated imgs 3~360
+            all_fundus_imgs.append(random_perturbation(rotate(fundus_imgs, angle, axes=(1, 2), reshape=False)))
+            all_fundus_imgs.append(random_perturbation(rotate(flipped_imgs, angle, axes=(1, 2), reshape=False)))
             all_vessel_imgs.append(rotate(vessel_imgs, angle, axes=(1, 2), reshape=False))
             all_vessel_imgs.append(rotate(flipped_vessels, angle, axes=(1, 2), reshape=False))
         fundus_imgs=np.concatenate(all_fundus_imgs,axis=0)
         vessel_imgs=np.round((np.concatenate(all_vessel_imgs,axis=0)))
     
     # z score with mean, std of each image
-    means, stds=[],[]
     n_all_imgs=fundus_imgs.shape[0]
-    for index in range(n_ori_imgs):
-        means.append(np.mean(fundus_imgs[index,...][mask_imgs[index,...] == 1.0],axis=0))
-        stds.append(np.std(fundus_imgs[index,...][mask_imgs[index,...] == 1.0],axis=0))
     for index in range(n_all_imgs):
-        fundus_imgs[index,...]=(fundus_imgs[index,...]-means[index%n_ori_imgs])/stds[index%n_ori_imgs]
-
-    return fundus_imgs, vessel_imgs, mask_imgs
+        mean=np.mean(fundus_imgs[index,...][fundus_imgs[index,...,0] > 40.0],axis=0)
+        std=np.std(fundus_imgs[index,...][fundus_imgs[index,...,0] > 40.0],axis=0)
+        assert len(mean)==3 and len(std)==3
+        fundus_imgs[index,...]=(fundus_imgs[index,...]-mean)/std
+    
+    if mask:
+        return fundus_imgs, vessel_imgs, mask_imgs
+    else:
+        return fundus_imgs, vessel_imgs
 
 def pixel_values_in_mask(true_vessels, pred_vessels,masks):
     assert np.max(pred_vessels)<=1.0 and np.min(pred_vessels)>=0.0
@@ -360,14 +386,14 @@ def crop_to_original(imgs, ori_shape):
             return imgs[(pred_h-ori_h)//2:(pred_h-ori_h)//2+ori_h,(pred_w-ori_w)//2:(pred_w-ori_w)//2+ori_w]
 
 def difference_map(ori_vessel, pred_vessel, mask):
-    # thresholding
-    ori_vessel=threshold_by_otsu(ori_vessel,mask, flatten=False)*255
-    pred_vessel=threshold_by_otsu(pred_vessel,mask, flatten=False)*255
+    thresholded_vessel=threshold_by_f1(np.expand_dims(ori_vessel, axis=0),np.expand_dims(pred_vessel, axis=0),
+                                np.expand_dims(mask, axis=0), flatten=False)
     
+    thresholded_vessel=np.squeeze(thresholded_vessel, axis=0)
     diff_map=np.zeros((ori_vessel.shape[0],ori_vessel.shape[1],3))
-    diff_map[(ori_vessel==255) & (pred_vessel==255)]=(0,255,0)   #Green (overlapping)
-    diff_map[(ori_vessel==255) & (pred_vessel!=255)]=(255,0,0)    #Red (false negative, missing in pred)
-    diff_map[(ori_vessel!=255) & (pred_vessel==255)]=(0,0,255)    #Blue (false positive)
+    diff_map[(ori_vessel==1) & (thresholded_vessel==1)]=(0,255,0)   #Green (overlapping)
+    diff_map[(ori_vessel==1) & (thresholded_vessel!=1)]=(255,0,0)    #Red (false negative, missing in pred)
+    diff_map[(ori_vessel!=1) & (thresholded_vessel==1)]=(0,0,255)    #Blue (false positive)
 
     return diff_map
 

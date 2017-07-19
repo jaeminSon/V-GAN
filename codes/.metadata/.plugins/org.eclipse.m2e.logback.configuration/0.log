@@ -1,3 +1,0 @@
-2017-06-16 10:52:09,523 [Worker-1] INFO  c.g.t.t.d.PublishedGradleVersions - Gradle version information cache is up-to-date. Trying to read.
-2017-06-16 10:56:49,433 [Thread-11] ERROR org.eclipse.jgit.util.FS - fatal: Could not switch to '/Library/Developer/CommandLineTools/usr/etc/': No such file or directory
-

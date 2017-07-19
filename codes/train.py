@@ -43,7 +43,7 @@ FLAGS,_= parser.parse_known_args()
 
 # training settings 
 os.environ['CUDA_VISIBLE_DEVICES']=FLAGS.gpu_index
-n_rounds=31
+n_rounds=10
 batch_size=FLAGS.batch_size
 n_filters_d=32
 n_filters_g=32
@@ -70,7 +70,7 @@ if not os.path.isdir(auc_out_dir):
     os.makedirs(auc_out_dir)
  
 # set training and validation dataset
-train_imgs, train_vessels, train_masks=utils.get_imgs(train_dir, augmentation=True, img_size=img_size, dataset=dataset)
+train_imgs, train_vessels =utils.get_imgs(train_dir, augmentation=True, img_size=img_size, dataset=dataset)
 train_vessels=np.expand_dims(train_vessels, axis=3)
 n_all_imgs=train_imgs.shape[0]
 n_train_imgs=int((1-val_ratio)*n_all_imgs)
@@ -78,7 +78,7 @@ train_indices=np.random.choice(n_all_imgs,n_train_imgs,replace=False)
 train_batch_fetcher=utils.TrainBatchFetcher(train_imgs[train_indices,...], train_vessels[train_indices,...], batch_size)
 val_imgs, val_vessels=train_imgs[np.delete(range(n_all_imgs),train_indices),...], train_vessels[np.delete(range(n_all_imgs),train_indices),...]
 # set test dataset
-test_imgs, test_vessels, test_masks=utils.get_imgs(test_dir, augmentation=False, img_size=img_size, dataset=dataset)
+test_imgs, test_vessels, test_masks=utils.get_imgs(test_dir, augmentation=False, img_size=img_size, dataset=dataset, mask=True)
 
 # create networks
 g = generator(img_size, n_filters_g) 
@@ -144,11 +144,7 @@ for n_round in range(n_rounds):
         vessels_in_mask, generated_in_mask = utils.pixel_values_in_mask(test_vessels, generated , test_masks)
         auc_roc=utils.AUC_ROC(vessels_in_mask,generated_in_mask,os.path.join(auc_out_dir,"auc_roc_{}.npy".format(n_round)))
         auc_pr=utils.AUC_PR(vessels_in_mask, generated_in_mask,os.path.join(auc_out_dir,"auc_pr_{}.npy".format(n_round)))
-        binarys_in_mask=utils.threshold_by_otsu(generated,test_masks)
-        dice_coeff=utils.dice_coefficient(vessels_in_mask, binarys_in_mask)
-        acc, sensitivity, specificity=utils.misc_measures(vessels_in_mask, binarys_in_mask)
-        utils.print_metrics(n_round+1, auc_pr=auc_pr, auc_roc=auc_roc, dice_coeff=dice_coeff, 
-                            acc=acc, senstivity=sensitivity, specificity=specificity, type='TESTING')
+        utils.print_metrics(n_round+1, auc_pr=auc_pr, auc_roc=auc_roc, type='TESTING')
          
         # print test images
         segmented_vessel=utils.remain_in_mask(generated, test_masks)
