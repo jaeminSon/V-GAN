@@ -1,4 +1,4 @@
-#V-GAN #
+# V-GAN #
 ### Retinal Vessel Segmentation in Fundoscopic Images with Generative Adversarial Networks ###
 
 ![bitbucket_header.jpg](https://bitbucket.org/repo/ekyjKAX/images/3167681377-bitbucket_header.jpg)
